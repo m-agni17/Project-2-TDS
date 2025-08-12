@@ -1,0 +1,31 @@
+# FastAPI and web server dependencies
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Data processing and analysis
+pandas
+numpy
+pyarrow
+openpyxl
+xlrd
+
+# S3 / DuckDB
+duckdb
+
+# Web scraping
+aiohttp
+beautifulsoup4
+
+# Machine Learning and Statistics (used for regression)
+scipy
+
+# Visualization
+matplotlib
+seaborn
+
+# LLM Integration
+groq
+
+# Utilities
+python-dotenv
