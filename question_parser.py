@@ -87,8 +87,7 @@ Parse this text:
 """ + text
 
     try:
-        with open("prompts/system_prompt_question.txt", "w") as f:
-            f.write(system_prompt)
+        
         response = client.models.generate_content(
             model=get_google_model(),
             contents=system_prompt,
@@ -100,8 +99,7 @@ Parse this text:
         )
         
         response_text = response.text
-        with open("prompts/user_prompt_response.txt", "w") as f:
-            f.write(response_text)
+        
         # Extract JSON from response
         start_idx = response_text.find('{')
         end_idx = response_text.rfind('}')

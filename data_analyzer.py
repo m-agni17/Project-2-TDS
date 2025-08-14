@@ -217,8 +217,6 @@ def analyze_questions_batch_gemini(content_summary: str,
         if regular_questions:
             batch_prompt = create_batch_analysis_prompt(content_summary, [q for _, q in regular_questions])
             
-            with open("prompts/user_prompt_question.txt", "w") as f:
-                f.write(batch_prompt)
             response = gemini_client.models.generate_content(
                 model=get_google_model(),
                 contents=batch_prompt,
@@ -280,8 +278,6 @@ def analyze_questions_individually_gemini(content_summary: str,
             else:
                 # Handle regular analysis questions
                 prompt = create_single_analysis_prompt(content_summary, question)
-                with open("prompts/user_prompt__individually_question.txt", "w") as f:
-                    f.write(prompt)
                 response = gemini_client.models.generate_content(
                     model=get_google_model(),
                     contents=prompt,
@@ -383,8 +379,6 @@ Based on the question and available columns, respond with ONLY valid JSON:
 If the question asks for a scatterplot of "Rank and Peak", use those exact column names.
 If columns aren't clear, use the first two numeric columns available.
         """
-        with open("prompts/user_prompt_visualization.txt", "w") as f:
-            f.write(viz_prompt)
         response = gemini_client.models.generate_content(
             model=get_google_model(),
             contents=viz_prompt,
