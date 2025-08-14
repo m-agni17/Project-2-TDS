@@ -1,388 +1,211 @@
+"""
+Question parsing functionality using Google Gemini to extract questions and data sources.
+Simplified to use Gemini directly for better performance.
+"""
+
+from typing import Dict, List, Optional, Tuple, Any
 import re
-import logging
-from typing import List, Tuple, Dict, Any
-from urllib.parse import urlparse
-import asyncio
+import json
+from google import genai
+from google.genai import types
+from config import get_google_api_key, get_google_model
 
-logger = logging.getLogger(__name__)
+def create_gemini_client():
+    """Create and return a Gemini client instance."""
+    return genai.Client(api_key=get_google_api_key())
 
-class QuestionParser:
+def extract_urls_from_text(text: str) -> List[str]:
+    """Extract URLs from text using regex patterns."""
+    url_pattern = r'https?://[^\s<>"{}|\\^`[\]]+'
+    urls = re.findall(url_pattern, text)
+    return list(set(urls))  # Remove duplicates
+
+def process_question_file(question_content: str) -> Dict[str, Any]:
     """
-    Parses questions.txt files to extract questions, URLs, and output format requirements.
-    Uses LLM-based parsing for better accuracy and understanding of natural language.
+    Process question file content and extract structured information.
+    
+    Args:
+        question_content: Raw content from questions.txt file
+        
+    Returns:
+        Dictionary containing parsed questions, URLs, and metadata
     """
+    client = create_gemini_client()
     
-    def __init__(self):
-        # Only keep URL pattern for basic URL extraction as fallback
-        self.url_pattern = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+    try:
+        # Try Gemini parsing first
+        parsed_questions = parse_questions_with_gemini(question_content, client)
+        
+        # Validate the parsed result
+        if validate_parsed_questions(parsed_questions):
+            return parsed_questions
+        else:
+            print("Gemini parsing validation failed, using fallback")
+            return fallback_question_parsing(question_content)
     
-    async def parse_questions(self, content: str) -> Tuple[List[str], List[str], str]:
-        """
-        Parse questions.txt content and extract questions, URLs, and output format using LLM.
-        
-        Args:
-            content: Raw content of questions.txt file
-            
-        Returns:
-            Tuple of (questions_list, urls_list, output_format)
-        """
-        try:
-            logger.info("Parsing questions.txt content using LLM")
-            
-            # Clean the content
-            content = content.strip()
-            
-            # Extract everything using LLM for better accuracy
-            questions = await self._extract_questions_with_llm(content)
-            urls = await self._extract_urls_with_llm(content)
-            output_format = await self._detect_output_format_with_llm(content)
-            
-            # If LLM fails for questions, log error but continue with other data
-            if not questions:
-                logger.warning("LLM question extraction returned no results")
-            
-            logger.info(f"Extracted {len(questions)} questions, {len(urls)} URLs, format: {output_format}")
-            
-            return questions, urls, output_format
-            
-        except Exception as e:
-            logger.error(f"Error parsing questions: {str(e)}")
-            return [], [], "json_array"  # Default fallback
+    except Exception as e:
+        print(f"Gemini parsing failed: {e}")
+        return fallback_question_parsing(question_content)
 
-    async def _extract_questions_with_llm(self, content: str) -> List[str]:
-        """Extract questions using LLM for better accuracy and natural language understanding."""
-        try:
-            # Import here to avoid circular imports
-            from llm_client import LLMClient
-            
-            llm_client = LLMClient()
-            
-            prompt = f"""You are an expert text parser specialized in extracting analysis questions from text documents.
+def parse_questions_with_gemini(text: str, client) -> Dict[str, Any]:
+    """
+    Use Gemini to parse questions and extract structured information.
+    
+    Args:
+        text: Raw question text
+        client: Gemini client instance
+    
+    Returns:
+        Dictionary containing parsed questions, URLs, and expected format
+    """
+    system_prompt = """
+You are a question parser for a data analysis system. Your job is to:
+1. Extract all questions from the input text
+2. Identify any URLs mentioned for data sources
+3. Determine the expected output format
+4. Classify the type of analysis needed
+5. If the question asks for a visualization, determine the type of visualization needed
+6. If the question asks us to do a thing then it is a question like "Draw a scatterplot of Rank and Peak along with a dotted red regression line through it."
 
-TEXT TO PARSE:
-{content}
 
-TASK:
-Extract all individual questions, analysis requests, or tasks that require data processing or analysis. Return ONLY the questions/tasks, one per line.
+Return your response as a JSON object with the following structure:
+{
+    "questions": ["question1", "question2", ...],
+    "urls": ["url1", "url2", ...],
+    "output_format": "array" or "object",
+    "analysis_types": ["scraping", "statistical", "visualization", "numerical"],
+    "visualization_requirements": {
+        "needed": true/false,
+        "type": "scatterplot/histogram/etc",
+        "encoding": "base64",
+        "format": "png/webp/etc"
+    }
+}
 
-RULES:
-1. Extract numbered questions (1., 2., 3., etc.) and remove the numbering
-2. Extract lettered questions (a., b., c., etc.) and remove the lettering  
-3. Extract questions that start with question words (How, What, Which, etc.)
-4. Extract requests for analysis, plots, calculations, or visualizations
-5. Extract imperative statements that request actions (Calculate..., Find..., Determine...)
-6. Remove all numbering/lettering prefixes from your output
-7. Ignore URLs, format instructions, and metadata
-8. Keep each question exactly as written (don't paraphrase or summarize)
-9. Each question should be on its own line
-10. Don't include explanatory text, just the questions
+Parse this text:
 
-EXAMPLES OF WHAT TO EXTRACT:
-- "How many movies earned over $2 billion worldwide?"
-- "What is the correlation between budget and revenue?"
-- "Calculate the average rating for each genre"
-- "Plot a scatterplot showing the relationship between variables"
-- "Find the earliest and latest release years"
-- "Which director has the highest average box office?"
+""" + text
 
-EXAMPLES OF WHAT TO IGNORE:
-- URLs (http://...)
-- Format instructions ("Answer in JSON format")
-- Data source references ("Using the dataset from...")
-- General instructions ("Scrape the data")
-
-Extract the questions now:"""
-            
-            try:
-                response = await llm_client._query_llm(prompt)
-                
-                # Parse the response more intelligently
-                questions = []
-                lines = response.strip().split('\n')
-                
-                for line in lines:
-                    line = line.strip()
-                    
-                    # Skip empty lines
-                    if not line:
-                        continue
-                    
-                    # Skip common LLM response artifacts
-                    skip_patterns = [
-                        'extract the questions',
-                        'here are the',
-                        'the questions are',
-                        'analysis requests',
-                        'questions:',
-                        'output:',
-                        'answer:',
-                        'format:',
-                        'instructions:',
-                        'examples:',
-                        'based on the text',
-                        'from the given text'
-                    ]
-                    
-                    if any(pattern in line.lower() for pattern in skip_patterns):
-                        continue
-                    
-                    # Remove any remaining numbering/lettering artifacts
-                    line = re.sub(r'^\d+[\.\)]\s*', '', line)  # Remove "1. " or "1) "
-                    line = re.sub(r'^[a-zA-Z][\.\)]\s*', '', line)  # Remove "a. " or "a) "
-                    line = re.sub(r'^[-•*]\s*', '', line)  # Remove bullet points
-                    line = re.sub(r'^\s*[-]\s*', '', line)  # Remove dashes
-                    
-                    # Final cleanup
-                    line = line.strip()
-                    
-                    # Basic validation - should be a reasonable length and look like a question/task
-                    if len(line) > 5 and self._is_valid_question_or_task(line):
-                        questions.append(line)
-                
-                if questions:
-                    logger.info(f"LLM successfully extracted {len(questions)} questions")
-                    return questions
-                else:
-                    logger.warning("LLM returned response but no valid questions found")
-                    return []
-                
-            except Exception as e:
-                logger.error(f"LLM question extraction failed: {str(e)}")
-                return []
-                
-        except Exception as e:
-            logger.error(f"Error in LLM question extraction: {str(e)}")
-            return []
-
-    def _is_valid_question_or_task(self, text: str) -> bool:
-        """Simple validation to check if text looks like a valid question or analysis task."""
-        text_lower = text.lower()
-        
-        # Skip obvious non-questions
-        if any(skip in text_lower for skip in [
-            'http://', 'https://', 'www.', '.com', '.org',
-            'json format', 'csv format', 'answer in',
-            'return as', 'format:', 'using the dataset'
-        ]):
-            return False
-        
-        # Must have some substance
-        if len(text.split()) < 3:
-            return False
-            
-        # Look for question/task indicators
-        indicators = [
-            # Question words
-            'how', 'what', 'where', 'when', 'why', 'which', 'who',
-            # Question auxiliaries  
-            'is', 'are', 'was', 'were', 'do', 'does', 'did',
-            'can', 'could', 'will', 'would', 'should',
-            # Action words
-            'calculate', 'find', 'determine', 'identify', 'analyze',
-            'compare', 'count', 'plot', 'draw', 'show', 'display',
-            'create', 'generate', 'list', 'extract', 'compute',
-            # Analysis terms
-            'correlation', 'regression', 'average', 'mean', 'median',
-            'distribution', 'relationship', 'trend', 'pattern'
-        ]
-        
-        # Check if it starts with an indicator or ends with ?
-        first_word = text_lower.split()[0] if text_lower.split() else ''
-        
-        return (
-            first_word in indicators or 
-            text.endswith('?') or
-            any(indicator in text_lower for indicator in indicators)
+    try:
+        with open("prompts/system_prompt_question.txt", "w") as f:
+            f.write(system_prompt)
+        response = client.models.generate_content(
+            model=get_google_model(),
+            contents=system_prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.1,
+                max_output_tokens=1000,
+                thinking_config=types.ThinkingConfig(thinking_budget=0)  # Disable thinking
+            )
         )
-    
-    async def _extract_urls_with_llm(self, content: str) -> List[str]:
-        """Extract URLs using LLM for better accuracy."""
-        try:
-            # Import here to avoid circular imports
-            from llm_client import LLMClient
-            
-            llm_client = LLMClient()
-            
-            prompt = f"""Extract all URLs from the following text. Return ONLY the URLs, one per line.
-
-TEXT:
-{content}
-
-INSTRUCTIONS:
-- Find all HTTP and HTTPS URLs
-- Return each URL on a separate line
-- Do not include any explanations or additional text
-- If no URLs found, return empty response
-
-URLs:"""
-            
-            try:
-                response = await llm_client._query_llm(prompt)
-                
-                urls = []
-                for line in response.strip().split('\n'):
-                    line = line.strip()
-                    if line.startswith(('http://', 'https://')):
-                        # Validate URL format
-                        try:
-                            parsed = urlparse(line)
-                            if parsed.scheme and parsed.netloc:
-                                urls.append(line)
-                        except:
-                            continue
-                
-                logger.info(f"LLM extracted {len(urls)} URLs")
-                return urls
-                
-            except Exception as e:
-                logger.error(f"LLM URL extraction failed: {str(e)}")
-                # Fallback to regex for URLs as they have a clear pattern
-                return self._extract_urls_fallback(content)
-                
-        except Exception as e:
-            logger.error(f"Error in LLM URL extraction: {str(e)}")
-            return self._extract_urls_fallback(content)
-    
-    def _extract_urls_fallback(self, content: str) -> List[str]:
-        """Fallback URL extraction using regex pattern."""
-        try:
-            urls = re.findall(self.url_pattern, content)
-            
-            # Clean and validate URLs
-            cleaned_urls = []
-            for url in urls:
-                try:
-                    parsed = urlparse(url)
-                    if parsed.scheme and parsed.netloc:
-                        cleaned_urls.append(url)
-                except:
-                    continue
-            
-            # Remove duplicates while preserving order
-            unique_urls = list(dict.fromkeys(cleaned_urls))
-            
-            return unique_urls
-            
-        except Exception as e:
-            logger.error(f"Error in fallback URL extraction: {str(e)}")
-            return []
-    
-    async def _detect_output_format_with_llm(self, content: str) -> str:
-        """Detect output format using LLM."""
-        try:
-            # Import here to avoid circular imports
-            from llm_client import LLMClient
-            
-            llm_client = LLMClient()
-            
-            prompt = f"""Analyze the following text and determine what output format is requested for the answers.
-
-TEXT:
-{content}
-
-TASK: Determine the requested output format from these options:
-- json_array (if text mentions "JSON array format", "array format", "list format", or similar)
-- json_object (if text mentions "JSON object format", "object format", "dictionary format", or similar)
-
-Look for phrases like:
-- "answer in JSON array format"
-- "return as JSON object"  
-- "format the response as an array"
-- "provide results in object format"
-
-Return ONLY one of these two options: json_array OR json_object
-
-If no specific format is mentioned or if unclear, default to: json_array
-
-Format:"""
-            
-            try:
-                response = await llm_client._query_llm(prompt)
-                
-                response = response.strip().lower()
-                
-                if 'json_object' in response or 'object' in response:
-                    return 'json_object'
-                else:
-                    return 'json_array'  # Default
-                
-            except Exception as e:
-                logger.error(f"LLM format detection failed: {str(e)}")
-                return 'json_array'  # Default fallback
-                
-        except Exception as e:
-            logger.error(f"Error in LLM format detection: {str(e)}")
-            return 'json_array'  # Default fallback
-    
-    def extract_data_sources(self, content: str) -> Dict[str, Any]:
-        """
-        Extract data source information from questions.txt.
         
-        Args:
-            content: Raw content of questions.txt
+        response_text = response.text
+        with open("prompts/user_prompt_response.txt", "w") as f:
+            f.write(response_text)
+        # Extract JSON from response
+        start_idx = response_text.find('{')
+        end_idx = response_text.rfind('}')
+        
+        if start_idx != -1 and end_idx != -1:
+            json_str = response_text[start_idx:end_idx + 1]
+            parsed_response = json.loads(json_str)
+        else:
+            raise json.JSONDecodeError("No JSON found in response", response_text, 0)
+        
+        # Add direct URL extraction as backup
+        direct_urls = extract_urls_from_text(text)
+        if direct_urls:
+            if "urls" not in parsed_response:
+                parsed_response["urls"] = []
+            parsed_response["urls"].extend(direct_urls)
+            parsed_response["urls"] = list(set(parsed_response["urls"]))  # Remove duplicates
             
-        Returns:
-            Dictionary with data source information
-        """
-        try:
-            sources = {
-                'urls': [],
-                's3_paths': [],
-                'database_connections': [],
-                'file_references': []
-            }
-            
-            lines = content.split('\n')
-            
-            for line in lines:
-                line = line.strip()
-                
-                # Extract URLs
-                if 'http://' in line or 'https://' in line:
-                    urls = re.findall(self.url_pattern, line)
-                    sources['urls'].extend(urls)
-                
-                # Extract S3 paths - improved parsing for SQL context
-                if 's3://' in line:
-                    # Handle S3 URLs that might be embedded in SQL queries
-                    # Pattern: s3://bucket/path?query_params followed by optional SQL characters
-                    s3_pattern = r"s3://[^'\s\)]+(?:\?[^'\s\)]+)?"
-                    s3_matches = re.findall(s3_pattern, line)
-                    
-                    for match in s3_matches:
-                        # Clean up the URL - remove any trailing SQL characters
-                        clean_url = match.rstrip("');")
-                        
-                        # Parse S3 path and extract region if present in query params
-                        s3_info = {'path': clean_url}
-                        
-                        # Check for s3_region in the URL query parameters
-                        if '?s3_region=' in clean_url:
-                            url_parts = clean_url.split('?')
-                            base_url = url_parts[0]
-                            query_params = url_parts[1] if len(url_parts) > 1 else ''
-                            
-                            # Extract region from query parameters
-                            region_match = re.search(r's3_region=([^&]+)', query_params)
-                            if region_match:
-                                s3_info['region'] = region_match.group(1)
-                                # Use the base URL without query parameters for DuckDB
-                                s3_info['path'] = base_url
-                        
-                        # Also check for s3_region mentioned separately in the line
-                        if 'region' not in s3_info:
-                            region_match = re.search(r's3_region=([^&\s]+)', line)
-                            if region_match:
-                                s3_info['region'] = region_match.group(1)
-                        
-                        sources['s3_paths'].append(s3_info)
-                
-                # Extract database connection info (basic patterns)
-                if any(keyword in line.lower() for keyword in ['postgres://', 'mysql://', 'sqlite://']):
-                    sources['database_connections'].append({'connection_string': line})
-            
-            return sources
-            
-        except Exception as e:
-            logger.error(f"Error extracting data sources: {str(e)}")
-            return {'urls': [], 's3_paths': [], 'database_connections': [], 'file_references': []} 
+        return parsed_response
+        
+    except (json.JSONDecodeError, Exception) as e:
+        print(f"Gemini parsing failed: {e}")
+        # Fallback to basic parsing if Gemini fails
+        return fallback_question_parsing(text)
+
+def fallback_question_parsing(text: str) -> Dict[str, Any]:
+    """
+    Fallback question parsing when Gemini fails.
+    Uses simple heuristics to extract questions.
+    """
+    lines = text.strip().split('\n')
+    questions = []
+    
+    for line in lines:
+        line = line.strip()
+        # Look for numbered questions or lines ending with '?'
+        if (re.match(r'^\d+\.', line) or 
+            line.endswith('?') or 
+            'what' in line.lower() or 
+            'how' in line.lower() or 
+            'which' in line.lower() or
+            'where' in line.lower() or
+            'when' in line.lower() or
+            'who' in line.lower() or
+            'why' in line.lower() or
+            'analyze' in line.lower() or
+            'find' in line.lower() or
+            'calculate' in line.lower() or
+            'count' in line.lower()):
+            questions.append(line)
+    
+    urls = extract_urls_from_text(text)
+    
+    # Determine if visualization is needed
+    needs_viz = any(keyword in text.lower() for keyword in 
+                   ['plot', 'chart', 'graph', 'scatterplot', 'scatter plot', 
+                    'visualization', 'visualize', 'draw', 'histogram', 
+                    'bar chart', 'line chart', 'base64', 'base-64'])
+    
+    # Determine visualization type
+    viz_type = "unknown"
+    if "scatterplot" in text.lower() or "scatter plot" in text.lower():
+        viz_type = "scatterplot"
+    elif "histogram" in text.lower():
+        viz_type = "histogram"
+    elif "bar chart" in text.lower():
+        viz_type = "bar"
+    elif "line chart" in text.lower():
+        viz_type = "line"
+    
+    return {
+        "questions": questions,
+        "urls": urls,
+        "output_format": "array" if "JSON array" in text else "object",
+        "analysis_types": ["scraping", "analysis", "numerical"],
+        "visualization_requirements": {
+            "needed": needs_viz,
+            "type": viz_type,
+            "encoding": "base64",
+            "format": "png"
+        }
+    }
+
+def validate_parsed_questions(parsed_data: Dict[str, Any]) -> bool:
+    """
+    Validate that parsed question data is complete and valid.
+    
+    Args:
+        parsed_data: Dictionary containing parsed question information
+        
+    Returns:
+        True if data is valid, False otherwise
+    """
+    required_keys = ["questions", "urls", "output_format"]
+    
+    return (
+        isinstance(parsed_data, dict) and
+        all(key in parsed_data for key in required_keys) and
+        isinstance(parsed_data["questions"], list) and
+        isinstance(parsed_data["urls"], list) and
+        len(parsed_data["questions"]) > 0
+    )
+
+# Keep old function name for backward compatibility
+def create_groq_client():
+    """Create Gemini client (backward compatibility)."""
+    return create_gemini_client() 

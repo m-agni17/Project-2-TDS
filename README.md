@@ -1,257 +1,290 @@
-# Data Analyst Agent API
+# Generic Data Analyst Agent
 
-A powerful AI-powered data analysis API that uses LLMs to source, prepare, analyze, and visualize arbitrary datasets based on incoming tasks.
+A FastAPI-based data analysis agent that uses LLMs to scrape any website, analyze content, and answer questions about the data. Built with a function-first architecture following SOLID principles adapted for Python.
 
 ## Features
 
-- **Multi-format Data Processing**: Supports CSV, JSON, Parquet, Excel, and database connections
-- **Web Scraping**: Automatically scrapes data from URLs mentioned in questions
-- **AI-Powered Analysis**: Uses Groq's LLM for intelligent data analysis
-- **Visualization Generation**: Creates charts and graphs as Base64 data URIs
-- **Flexible Output Formats**: Supports JSON array and JSON object response formats
-- **Timeout Management**: 3-minute processing limit with progress tracking
-- **Error Handling**: Comprehensive error handling with detailed logging
+- 🤖 **LLM-Powered Analysis**: Uses AI to understand and analyze content from any website
+- 🌐 **Universal Web Scraping**: Extracts text, tables, lists, and metadata from any website
+- 📊 **Generic Data Analysis**: LLM-driven analysis that adapts to any data type or domain
+- 📈 **Smart Visualization**: Automatically generates appropriate charts based on question context
+- ⚡ **Fast API**: RESTful API with file upload support and 3-minute response guarantee  
+- 🏗️ **Modular Architecture**: Function-first design for maintainability and scalability
 
 ## Quick Start
 
 ### Prerequisites
 
 - Python 3.8+
-- Groq API key
+- Groq API Key (get from [Groq Console](https://console.groq.com/))
 
 ### Installation
 
-1. Clone the repository:
-```bash
-git clone <repository-url>
-cd Data-Analyst-Agent-API
-```
+1. **Clone and Setup**
+   ```bash
+   cd Project-2
+   pip install -r requirements.txt
+   ```
 
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
+2. **Configure Environment**
+   ```bash
+   cp config.env.template .env
+   # Edit .env and add your GROQ_API_KEY
+   ```
 
-3. Set environment variables:
-```bash
-export GROQ_API_KEY="your-groq-api-key-here"
-```
-
-4. Run the server:
-```bash
-python main.py
-```
+3. **Start the Server**
+   ```bash
+   python main.py
+   ```
 
 The API will be available at `http://localhost:8000`
 
-## API Documentation
+## Test the Generic Capabilities
+
+```bash
+# Test with the generic sample (countries population data)
+curl -X POST "http://localhost:8000/api/" \
+  -F "questions.txt=@sample_questions_generic.txt"
+
+# Test with the original films example  
+curl -X POST "http://localhost:8000/api/" \
+  -F "questions.txt=@sample_questions.txt"
+```
+
+## API Usage
 
 ### Main Endpoint
 
-**POST** `/api/`
+```bash
+POST /api/
+```
 
-#### Request Format
+**Request Format**: `multipart/form-data`
 
-The API accepts multipart/form-data with the following requirements:
+- `questions.txt` (required): Text file containing analysis questions
+- Additional files (optional): CSV, images, or other data files
 
-- **Required**: `questions.txt` - Text file containing analysis questions
-- **Optional**: Additional data files (CSV, JSON, Parquet, Excel, etc.)
-
-#### Request Body Requirements
-
-1. **questions.txt**: Must contain one or more analysis questions in plain text
-2. **Data files**: Any number of structured data files
-3. **URLs**: Can be included in questions.txt for automatic scraping
-
-#### Example Request
+### Example Request
 
 ```bash
-curl "http://localhost:8000/api/" \
+curl -X POST "http://localhost:8000/api/" \
   -F "questions.txt=@questions.txt" \
   -F "data.csv=@data.csv" \
   -F "image.png=@image.png"
 ```
 
-#### Response Format
+### Example Questions File
 
-The response format is determined by the content of `questions.txt`:
+```text
+Scrape content from this website: https://en.wikipedia.org/wiki/List_of_countries_by_population
 
-- **JSON Array**: `[result1, result2, result3]`
-- **JSON Object**: `{"question1": "result1", "question2": "result2"}`
+Answer the following questions based on the scraped content:
 
-### Health Check
-
-**GET** `/health`
-
-Returns server health status.
-
-## Usage Examples
-
-### Example 1: Wikipedia Dataset Analysis
-
-**questions.txt**:
-```
-Scrape the list of highest-grossing films from:
-https://en.wikipedia.org/wiki/List_of_highest-grossing_films
-
-Answer in JSON array format:
-1. How many $2B+ movies were released before 2000?
-2. Which is the earliest film that grossed over $1.5B?
-3. What's the correlation between Rank and Peak?
-4. Draw a scatterplot of Rank vs Peak with a dotted red regression line.
-   Return as Base64 PNG data URI under 100,000 bytes.
+1. What are the top 5 most populous countries according to the data?
+2. What is the total population of the United States?
+3. How many countries have a population greater than 100 million?
+4. What percentage of world population does China represent?
+5. Create a visualization showing the relationship between any two numerical columns found in the data. Return as a base-64 encoded data URI under 100,000 bytes.
 ```
 
-**Expected Response**:
+### Example Response
+
 ```json
-[1, "Titanic", 0.485782, "data:image/png;base64,iVBORw0KG..."]
-```
-
-### Example 2: S3 Dataset Analysis
-
-**questions.txt**:
-```
-Using the dataset from:
-s3://indian-high-court-judgments/metadata/parquet/year=*/court=*/bench=*/metadata.parquet?s3_region=ap-south-1
-
-Answer in JSON object format:
-1. Which high court disposed the most cases from 2019–2022?
-2. What's the regression slope of (date_of_registration → decision_date) by year for court=33_10?
-3. Plot the year vs delay (days) from question #2 as scatterplot with regression line.
-   Return as Base64 data URI under 100,000 bytes.
-```
-
-**Expected Response**:
-```json
-{
-  "Which high court disposed the most cases from 2019–2022?": "XYZ High Court",
-  "What's the regression slope of (date_of_registration → decision_date) by year for court=33_10?": 1.27,
-  "Plot the year vs delay (days) from question #2 as scatterplot with regression line": "data:image/webp;base64,..."
-}
+["China, India, United States, Indonesia, Pakistan", "331 million", "14", "18.5%", "data:image/png;base64,iVBORw0KG..."]
 ```
 
 ## Architecture
 
-The API follows SOLID principles with a modular architecture:
+The system follows a function-first approach with clear separation of concerns:
 
-### Core Components
+```
+├── main.py                 # FastAPI application and endpoints
+├── config.py              # Configuration management
+├── question_parser.py     # LLM-based question parsing
+├── data_scraper.py        # Web scraping functionality
+├── data_analyzer.py       # Statistical analysis and LLM insights
+├── visualizer.py          # Chart generation and encoding
+└── data_orchestrator.py   # Main coordination logic
+```
 
-1. **main.py**: FastAPI application and main endpoint
-2. **data_processor.py**: Handles data ingestion from multiple formats
-3. **web_scraper.py**: Scrapes data from URLs
-4. **llm_client.py**: Interfaces with Groq LLM for analysis
-5. **visualization_generator.py**: Creates charts and converts to Base64
-6. **question_parser.py**: Parses questions.txt and extracts metadata
+### Key Principles
 
-### Data Flow
+- **Function-First**: Pure functions over complex classes
+- **Single Responsibility**: Each module has a focused purpose
+- **Dependency Injection**: Dependencies passed as parameters
+- **Error Handling**: Graceful fallbacks and meaningful errors
+- **Scalability**: Modular design for easy extension
 
-1. **Request Processing**: Parse uploaded files and questions
-2. **Data Ingestion**: Process data files and scrape URLs
-3. **Question Analysis**: Extract questions and determine output format
-4. **AI Analysis**: Use LLM to analyze data and answer questions
-5. **Visualization**: Generate charts for visualization questions
-6. **Response Formatting**: Format results according to requested format
+## Supported Analysis Types
 
-## Supported Data Sources
+### Data Sources
+- **Any Website**: Universal scraping that adapts to any site structure
+- **Tables**: Automatic detection and extraction from any webpage
+- **Text Content**: Full text analysis from any source
+- **Lists and Metadata**: Structured content extraction
+- **CSV Files**: Direct upload and processing
+- **Images**: Basic processing and metadata extraction
 
-### File Formats
-- **CSV**: Comma-separated values with intelligent delimiter detection
-- **JSON**: Various JSON structures with automatic normalization
-- **Parquet**: High-performance columnar format
-- **Excel**: .xlsx and .xls files with multi-sheet support
-- **Text**: Plain text files
+### Analysis Capabilities  
+- **Universal LLM Analysis**: AI-powered analysis that adapts to any domain
+- **Question Answering**: Natural language questions about any data
+- **Pattern Recognition**: Finds insights in any type of content
+- **Data Relationships**: Discovers connections in scraped data
+- **Statistical Analysis**: When numerical data is available
 
-### Web Sources
-- **HTML Tables**: Automatic table extraction from web pages
-- **JSON APIs**: Direct API response processing
-- **CSV Downloads**: Direct CSV file downloads
-- **Structured Data**: JSON-LD and microdata extraction
-
-### Database Connections
-- **PostgreSQL**: Full PostgreSQL support
-- **MySQL**: MySQL database connections
-- **SQLite**: Local SQLite databases
-- **S3**: Amazon S3 data with DuckDB integration
-
-## Visualization Features
-
-### Supported Chart Types
-- **Scatter Plots**: With optional regression lines
-- **Line Charts**: Time series and trend analysis
-- **Bar Charts**: Categorical data visualization
-- **Correlation Heatmaps**: Statistical relationships
-- **Distribution Plots**: Data distribution analysis
-- **Box Plots**: Statistical summaries
-
-### Output Formats
-- **PNG**: High-quality raster images
-- **WebP**: Compressed web-optimized format
-- **JPEG**: Compressed format for photographs
-
-All visualizations are automatically optimized to stay under 100KB.
+### Visualization Features
+- **Context-Aware Charts**: Automatically chooses appropriate visualization
+- **Dynamic Adaptation**: Adjusts to available data types
+- **Size Optimization**: Automatic compression under 100KB
+- **Base64 Encoding**: Direct embedding in JSON responses  
+- **Multiple Chart Types**: Scatter plots, histograms, bar charts, line charts
 
 ## Configuration
 
-### Environment Variables
-- `GROQ_API_KEY`: Required Groq API key for LLM access
+Environment variables in `.env`:
 
-### Timeout Settings
-- Default processing timeout: 3 minutes
-- Individual operation timeout: 30 seconds
-- Visualization generation timeout: 60 seconds
+```bash
+# Required
+GROQ_API_KEY=your_api_key_here
+
+# Optional
+GROQ_MODEL=mixtral-8x7b-32768    # LLM model to use
+HOST=0.0.0.0                     # Server host
+PORT=8000                        # Server port
+MAX_FILE_SIZE=10485760           # 10MB file size limit
+RESPONSE_TIMEOUT=180             # 3 minute timeout
+DEBUG=false                      # Debug mode
+```
+
+## API Documentation
+
+Once running, visit:
+- **Interactive Docs**: http://localhost:8000/docs
+- **ReDoc**: http://localhost:8000/redoc
+- **Health Check**: http://localhost:8000/health
+- **Examples**: http://localhost:8000/api/example
 
 ## Error Handling
 
-The API includes comprehensive error handling:
+The API provides structured error responses:
 
-- **422 Unprocessable Entity**: Missing questions.txt file
-- **408 Request Timeout**: Processing exceeded 3-minute limit
-- **500 Internal Server Error**: Unexpected server errors
+```json
+{
+  "detail": "Error description",
+  "error_type": "data_analysis_error"
+}
+```
 
-All errors include detailed messages for debugging.
+Common HTTP status codes:
+- `200`: Success
+- `400`: Bad request (missing files, invalid format)
+- `408`: Timeout (analysis took > 3 minutes)
+- `413`: File too large
+- `422`: Data analysis error
+- `500`: Internal server error
 
 ## Performance Considerations
 
-- **Concurrent Processing**: Multiple datasets processed in parallel
-- **Memory Management**: Efficient handling of large datasets
-- **Timeout Management**: Prevents long-running requests
-- **Resource Cleanup**: Automatic cleanup of temporary resources
+- **Response Time**: 3-minute maximum per request
+- **File Size**: 10MB limit per file
+- **Concurrent Requests**: Handled via async/await
+- **Memory Management**: Streaming file processing
+- **Visualization Size**: 100KB limit for base64 images
 
 ## Development
 
-### Running Tests
+### Running in Debug Mode
+
 ```bash
-python -m pytest tests/
+DEBUG=true python main.py
 ```
 
-### Development Mode
-```bash
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+### Adding New Analysis Types
+
+1. **Extend Question Parser**: Add patterns in `question_parser.py`
+2. **Add Data Source**: Implement scraper in `data_scraper.py`
+3. **Create Analyzer**: Add analysis logic in `data_analyzer.py`
+4. **Update Orchestrator**: Wire components in `data_orchestrator.py`
+
+### Testing
+
+The system is designed for easy testing with pure functions:
+
+```python
+# Example: Test data analysis
+from data_analyzer import count_movies_by_criteria
+import pandas as pd
+
+df = pd.DataFrame(...)  # Your test data
+result = count_movies_by_criteria(df, min_gross=2000000000, max_year=2000)
+assert result == expected_value
 ```
 
-### Adding New Data Processors
-Extend the `DataProcessor` class to support additional file formats.
+## Deployment
 
-### Adding New Visualization Types
-Extend the `VisualizationGenerator` class to support new chart types.
+### Docker (Recommended)
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY . .
+EXPOSE 8000
+
+CMD ["python", "main.py"]
+```
+
+### Production Considerations
+
+- Set `DEBUG=false`
+- Configure proper CORS origins
+- Add rate limiting
+- Set up proper logging
+- Use environment-specific configurations
+- Consider load balancing for high traffic
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **GROQ_API_KEY not set**: Ensure the environment variable is properly configured
-2. **Timeout errors**: Large datasets may require optimization
-3. **File format errors**: Ensure uploaded files are in supported formats
-4. **Memory issues**: Large datasets may require server optimization
+1. **"GROQ_API_KEY not found"**
+   - Ensure `.env` file exists with valid API key
+
+2. **"Analysis timed out"**
+   - Check internet connection for scraping
+   - Consider increasing `RESPONSE_TIMEOUT`
+
+3. **"No Wikipedia tables found"**
+   - Verify URL is accessible
+   - Check if page structure changed
+
+4. **Visualization too large**
+   - Reduce data points or image quality
+   - Check base64 output size
 
 ### Logging
 
-The API uses structured logging. Check logs for detailed error information.
+Enable debug mode for detailed logs:
+
+```bash
+DEBUG=true python main.py
+```
+
+## Contributing
+
+1. Follow the function-first architecture principles
+2. Add comprehensive error handling
+3. Include type hints for all functions
+4. Keep functions under 50 lines when possible
+5. Add docstrings for all public functions
 
 ## License
 
-This project is licensed under the MIT License.
+This project is built for educational and evaluation purposes.
 
-## Support
+---
 
-For issues and questions, please create a GitHub issue or contact the development team. 
+**Built with ❤️ using FastAPI, Groq, and modern Python practices.** 
