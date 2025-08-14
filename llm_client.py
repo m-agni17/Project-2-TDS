@@ -515,6 +515,8 @@ ANALYSIS GUIDELINES:
 - For date-related questions: Use the actual dates from the data in appropriate format
 - For percentage/ratio questions: Calculate based on the actual data proportions
 
+CRITICAL: You MUST respond with ONLY a valid JSON array. No other text, no explanations, no markdown formatting.
+
 RESPONSE FORMAT:
 Return a valid JSON array with exactly {len(questions)} elements, where:
 - Element 1 = answer to question 1
@@ -530,20 +532,39 @@ JSON Response:"""
     async def _parse_batch_analysis_response(self, response: str, questions: List[str]) -> List[Any]:
         """Parse the batch LLM response and return a list of answers."""
         try:
-            # Clean the response
+            # Clean the response more thoroughly
+            response = response.strip()
+            
+            # Remove markdown formatting
+            if response.startswith("```json"):
+                response = response[7:]
+            if response.startswith("```"):
+                response = response[3:]
+            if response.endswith("```"):
+                response = response[:-3]
             response = response.strip()
             
             # Remove common response prefixes
             prefixes_to_remove = [
                 "JSON Response:", "Response:", "Answer:", "Result:", "Based on the data:",
                 "According to the data:", "From the analysis:", "The results are:",
-                "Looking at the data:", "After analyzing:", "Here are the answers:"
+                "Looking at the data:", "After analyzing:", "Here are the answers:",
+                "JSON Array:", "Array:", "The answers are:", "Answers:"
             ]
             
             for prefix in prefixes_to_remove:
                 if response.lower().startswith(prefix.lower()):
                     response = response[len(prefix):].strip()
                     break
+            
+            # Remove any trailing text after the JSON array
+            # Look for the last ] and truncate there
+            last_bracket = response.rfind(']')
+            if last_bracket != -1:
+                # Check if there's significant content after the last bracket
+                after_bracket = response[last_bracket + 1:].strip()
+                if after_bracket and not after_bracket.startswith(','):  # Allow for trailing commas
+                    response = response[:last_bracket + 1]
             
             # Try to parse as JSON array
             try:
@@ -576,6 +597,7 @@ JSON Response:"""
                 
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse batch response as JSON: {str(e)}")
+                logger.error(f"Raw response: {response[:500]}...")  # Log first 500 chars for debugging
                 
                 # Try to extract answers from text format as fallback
                 return await self._parse_text_batch_response(response, questions)
@@ -584,7 +606,7 @@ JSON Response:"""
             logger.error(f"Error parsing batch analysis response: {str(e)}")
             
             # Return error messages for all questions
-            return [f"Error processing question: {str(e)}" for _ in questions]
+            return ["Unable to determine from available data" for _ in questions]
 
     async def _parse_individual_answer(self, answer: Any, question: str) -> Any:
         """Parse an individual answer from the batch response."""

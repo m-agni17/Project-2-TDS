@@ -206,15 +206,41 @@ class VisualizationGenerator:
         config = {}
         
         # For line plots, typically X is time/date or sequential, Y is the value
-        date_cols = df.select_dtypes(include=['datetime64', 'date']).columns.tolist()
+        date_cols = []
         numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+        
+        # Try to find date columns more robustly
+        try:
+            # Check for datetime columns
+            datetime_cols = df.select_dtypes(include=['datetime64', 'datetime']).columns.tolist()
+            date_cols.extend(datetime_cols)
+            
+            # Check for columns that might contain date strings
+            for col in df.columns:
+                if col.lower() in ['date', 'time', 'timestamp', 'day', 'month', 'year']:
+                    if col not in date_cols:
+                        date_cols.append(col)
+                elif df[col].dtype == 'object':
+                    # Try to parse a sample of the column to see if it contains dates
+                    sample = df[col].dropna().head(5)
+                    if len(sample) > 0:
+                        try:
+                            pd.to_datetime(sample.iloc[0])
+                            if col not in date_cols:
+                                date_cols.append(col)
+                        except:
+                            pass
+        except Exception as e:
+            logger.warning(f"Error detecting date columns: {str(e)}")
+            date_cols = []
         
         if date_cols:
             x_col = date_cols[0]
             y_col = columns_mentioned[0] if columns_mentioned else (numeric_cols[0] if numeric_cols else df.columns[1])
         else:
+            # Use first column as X-axis if no date columns found
             x_col = df.columns[0]
-            y_col = columns_mentioned[0] if columns_mentioned else df.columns[1]
+            y_col = columns_mentioned[0] if columns_mentioned else (df.columns[1] if len(df.columns) > 1 else df.columns[0])
         
         config.update({
             'x_col': x_col,
@@ -308,7 +334,52 @@ class VisualizationGenerator:
         x_col = config['x_col']
         y_col = config['y_col']
         
-        ax.plot(df[x_col], df[y_col], marker='o', linewidth=2, markersize=4)
+        try:
+            # Prepare x-axis data
+            x_data = df[x_col].copy()
+            y_data = df[y_col].copy()
+            
+            # Try to convert x_data to datetime if it looks like dates
+            if x_data.dtype == 'object':
+                try:
+                    # Try to parse as datetime
+                    x_data = pd.to_datetime(x_data, errors='coerce')
+                    # Drop rows where date conversion failed
+                    valid_mask = x_data.notna() & y_data.notna()
+                    x_data = x_data[valid_mask]
+                    y_data = y_data[valid_mask]
+                except Exception as e:
+                    logger.warning(f"Could not parse {x_col} as dates: {str(e)}")
+                    # Use original data if date parsing fails
+                    x_data = df[x_col]
+                    y_data = df[y_col]
+            
+            # Ensure we have numeric y-data
+            if y_data.dtype == 'object':
+                try:
+                    y_data = pd.to_numeric(y_data, errors='coerce')
+                except:
+                    pass
+            
+            # Remove any remaining NaN values
+            valid_mask = x_data.notna() & y_data.notna()
+            x_data = x_data[valid_mask]
+            y_data = y_data[valid_mask]
+            
+            if len(x_data) == 0:
+                ax.text(0.5, 0.5, 'No valid data for line plot', ha='center', va='center', transform=ax.transAxes)
+                return
+            
+            # Create the line plot
+            ax.plot(x_data, y_data, marker='o', linewidth=2, markersize=4)
+            
+            # Format x-axis if it's datetime
+            if pd.api.types.is_datetime64_any_dtype(x_data):
+                ax.tick_params(axis='x', rotation=45)
+                
+        except Exception as e:
+            logger.error(f"Error creating line plot: {str(e)}")
+            ax.text(0.5, 0.5, 'Error creating line plot', ha='center', va='center', transform=ax.transAxes)
     
     async def _create_bar_plot(self, ax, config: Dict[str, Any]):
         """Create a bar plot."""
