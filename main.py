@@ -6,6 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from datetime import datetime
 import logging
+import re
+import json
 
 from data_processor import DataProcessor
 from llm_client import LLMClient
@@ -34,31 +36,180 @@ app.add_middleware(
 
 # Initialize core components
 data_processor = DataProcessor()
-# Lazily initialize LLM client to avoid import-time env var issues
-llm_client: Optional[LLMClient] = None
+llm_client = LLMClient()
 web_scraper = WebScraper()
 question_parser = QuestionParser()
 viz_generator = VisualizationGenerator()
 
-
-def get_llm_client() -> LLMClient:
-    """Get or create the LLMClient instance lazily."""
-    global llm_client
-    if llm_client is None:
+class ResponseFormatter:
+    """Handles mapping of questions to expected field names and formatting responses dynamically."""
+    
+    def __init__(self):
+        # Remove all hardcoded mappings - make it completely generic
+        pass
+    
+    async def map_questions_to_fields(self, questions: List[str]) -> Dict[str, str]:
+        """Dynamically map questions to appropriate field names using LLM."""
         try:
+            from llm_client import LLMClient
             llm_client = LLMClient()
-        except ValueError as e:
-            logger.error(str(e))
-            raise HTTPException(status_code=500, detail="Server LLM configuration missing")
-    return llm_client
+            
+            # Create a prompt to generate field names
+            questions_text = "\n".join([f"{i+1}. {q}" for i, q in enumerate(questions)])
+            
+            prompt = f"""You are an expert at converting analysis questions into appropriate JSON field names.
 
+QUESTIONS:
+{questions_text}
 
-@app.on_event("startup")
-async def startup_check():
-    # Log presence (not value) of GROQ_API_KEY for easier ops debugging
-    if not os.getenv("GROQ_API_KEY"):
-        logger.warning("GROQ_API_KEY not set at startup; LLM features will fail until configured")
+TASK: For each question, generate a concise, descriptive field name that would be appropriate for a JSON response.
 
+RULES:
+1. Field names should be lowercase with underscores (snake_case)
+2. Field names should be descriptive but concise (2-4 words max)
+3. For questions asking "how many" or "count" → use "_count" suffix
+4. For questions asking "which" or "what" (seeking text) → use descriptive noun
+5. For questions asking about averages → use "average_" or "mean_" prefix
+6. For questions asking about correlations → use "_correlation" suffix
+7. For questions asking about charts/graphs/plots → use "_chart" or "_graph" suffix
+8. For questions asking about dates → use "_date" suffix
+9. For questions asking about maximums → use "max_" prefix
+10. For questions asking about minimums → use "min_" prefix
+11. For questions asking about totals → use "total_" prefix
+12. For questions asking about medians → use "median_" prefix
+
+EXAMPLES:
+- "How many edges are in the network?" → "edge_count"
+- "What is the total sales amount?" → "total_sales"
+- "Which region has the highest sales?" → "top_region"
+- "What is the correlation between temperature and precipitation?" → "temp_precip_correlation"
+- "Create a bar chart showing sales by region" → "sales_bar_chart"
+- "What is the average temperature?" → "average_temperature"
+- "On which date was the maximum precipitation recorded?" → "max_precip_date"
+
+FORMAT: Return ONLY a JSON object mapping question numbers to field names:
+{{"1": "field_name_1", "2": "field_name_2", ...}}
+
+JSON Response:"""
+
+            response = await llm_client._query_llm(prompt)
+            
+            # Parse the JSON response
+            try:
+                field_mapping = json.loads(response.strip())
+                
+                # Convert to question → field name mapping
+                result = {}
+                for i, question in enumerate(questions):
+                    question_num = str(i + 1)
+                    if question_num in field_mapping:
+                        result[question] = field_mapping[question_num]
+                    else:
+                        # Fallback to auto-generated field name
+                        result[question] = self._create_field_name_from_question(question)
+                
+                return result
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse field mapping JSON: {str(e)}")
+                # Fallback to auto-generated field names
+                return {q: self._create_field_name_from_question(q) for q in questions}
+                
+        except Exception as e:
+            logger.error(f"Error in dynamic field mapping: {str(e)}")
+            # Fallback to auto-generated field names
+            return {q: self._create_field_name_from_question(q) for q in questions}
+    
+    def _create_field_name_from_question(self, question: str) -> str:
+        """Create a field name from question text as fallback."""
+        # Remove question words and punctuation
+        clean_question = re.sub(r'^(what|how|which|where|when|why|who|is|are|do|does|did|can|could|will|would|should)\s+', '', question.lower())
+        clean_question = re.sub(r'[^\w\s]', '', clean_question)
+        
+        # Take first few significant words and clean them up
+        words = clean_question.split()[:4]
+        
+        # Remove common filler words
+        filler_words = {'the', 'a', 'an', 'of', 'in', 'on', 'at', 'by', 'for', 'with', 'from', 'to', 'and', 'or', 'but'}
+        words = [w for w in words if w not in filler_words]
+        
+        field_name = "_".join(words) if words else "unknown_field"
+        return field_name
+    
+    async def format_response(self, questions: List[str], answers: List[Any], output_format: str) -> Dict[str, Any]:
+        """Format the response according to the expected schema."""
+        try:
+            # Get dynamic field mapping
+            field_mapping = await self.map_questions_to_fields(questions)
+            
+            if output_format.lower() == "json_object":
+                result = {}
+                for question, answer in zip(questions, answers):
+                    field_name = field_mapping.get(question, self._create_field_name_from_question(question))
+                    result[field_name] = self._process_answer(answer, field_name, question)
+                return result
+            else:
+                # For json_array, still create object format for structured data
+                result = {}
+                for question, answer in zip(questions, answers):
+                    field_name = field_mapping.get(question, self._create_field_name_from_question(question))
+                    result[field_name] = self._process_answer(answer, field_name, question)
+                return result
+                
+        except Exception as e:
+            logger.error(f"Error formatting response: {str(e)}")
+            # Fallback to simple object format
+            result = {}
+            for question, answer in zip(questions, answers):
+                field_name = self._create_field_name_from_question(question)
+                result[field_name] = self._process_answer(answer, field_name, question)
+            return result
+    
+    def _process_answer(self, answer: Any, field_name: str, original_question: str) -> Any:
+        """Process individual answer based on field type and question context."""
+        try:
+            # Handle base64 images (charts, graphs, plots)
+            if any(keyword in field_name.lower() for keyword in ["chart", "graph", "plot", "histogram"]) or \
+               any(keyword in original_question.lower() for keyword in ["chart", "graph", "plot", "draw", "histogram", "base64", "png"]):
+                if isinstance(answer, str):
+                    # Ensure it's a proper base64 data URI
+                    if answer.startswith("data:image/"):
+                        return answer
+                    elif answer.startswith("iVBORw0KGgo") or len(answer) > 100:  # Looks like base64
+                        return f"data:image/png;base64,{answer}"
+                    else:
+                        return "Unable to determine from available data"
+                return "Unable to determine from available data"
+            
+            # Handle numeric fields based on question context
+            if any(keyword in original_question.lower() for keyword in ["how many", "count", "total", "sum", "average", "mean", "median", "correlation", "minimum", "maximum", "min", "max"]):
+                if isinstance(answer, (int, float)):
+                    return answer
+                elif isinstance(answer, str):
+                    # Try to extract number from string
+                    number_match = re.search(r'-?\d+\.?\d*', answer.replace(',', ''))
+                    if number_match:
+                        try:
+                            num_str = number_match.group()
+                            return float(num_str) if '.' in num_str else int(num_str)
+                        except ValueError:
+                            pass
+                return answer  # Return as-is if can't convert
+            
+            # Handle string fields - clean up the answer
+            if isinstance(answer, str):
+                # Clean up the answer
+                cleaned = re.sub(r'^(the\s+|a\s+|an\s+)', '', str(answer).strip(), flags=re.IGNORECASE)
+                return cleaned
+            
+            # Default: return as-is
+            return answer
+            
+        except Exception as e:
+            logger.error(f"Error processing answer for field {field_name}: {str(e)}")
+            return answer
+
+response_formatter = ResponseFormatter()
 
 @app.post("/api/")
 async def analyze_data(request: Request):
@@ -140,7 +291,7 @@ async def analyze_data(request: Request):
         question_types = []  # Track which type each question is
         
         for question in parsed_questions:
-            if "plot" in question.lower() or "chart" in question.lower() or "graph" in question.lower():
+            if any(keyword in question.lower() for keyword in ["plot", "chart", "graph", "draw", "histogram", "base64", "png"]):
                 viz_questions.append(question)
                 question_types.append("visualization")
             else:
@@ -157,13 +308,13 @@ async def analyze_data(request: Request):
         if analysis_questions:
             try:
                 logger.info(f"Processing {len(analysis_questions)} analysis questions in batch")
-                analysis_responses = await get_llm_client().analyze_questions_batch(analysis_questions, all_data)
+                analysis_responses = await llm_client.analyze_questions_batch(analysis_questions, all_data)
             except Exception as e:
                 logger.error(f"Error in batch processing: {str(e)}")
                 # Fallback to individual processing
                 for question in analysis_questions:
                     try:
-                        response = await get_llm_client().analyze_question(question, all_data)
+                        response = await llm_client.analyze_question(question, all_data)
                         analysis_responses.append(response)
                     except Exception as individual_error:
                         logger.error(f"Error processing individual question: {str(individual_error)}")
@@ -177,14 +328,14 @@ async def analyze_data(request: Request):
                     # Check timeout for each visualization
                     elapsed = (datetime.now() - start_time).total_seconds()
                     if elapsed > 170:
-                        viz_responses.append("Processing timeout exceeded")
+                        viz_responses.append("Unable to determine from available data")
                         continue
                     
                     response = await viz_generator.generate_visualization(question, all_data)
                     viz_responses.append(response)
                 except Exception as e:
                     logger.error(f"Error processing visualization question: {str(e)}")
-                    viz_responses.append(f"Error processing visualization: {str(e)}")
+                    viz_responses.append("Unable to determine from available data")
         
         # Merge responses back in original order
         responses = []
@@ -197,26 +348,18 @@ async def analyze_data(request: Request):
                     responses.append(analysis_responses[analysis_idx])
                     analysis_idx += 1
                 else:
-                    responses.append("Error: Missing analysis response")
+                    responses.append("Unable to determine from available data")
             else:  # visualization
                 if viz_idx < len(viz_responses):
                     responses.append(viz_responses[viz_idx])
                     viz_idx += 1
                 else:
-                    responses.append("Error: Missing visualization response")
+                    responses.append("Unable to determine from available data")
         
-        # Format response according to requested format
-        if output_format.lower() == "json_array":
-            return responses
-        elif output_format.lower() == "json_object":
-            # Create object mapping questions to responses
-            result = {}
-            for question, response in zip(parsed_questions, responses):
-                result[question] = response
-            return result
-        else:
-            # Default to array format
-            return responses
+        # Format response using the new formatter
+        formatted_response = await response_formatter.format_response(parsed_questions, responses, output_format)
+        
+        return formatted_response
             
     except HTTPException:
         raise
@@ -233,7 +376,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=int(os.getenv("PORT", 8000)),
+        port=8000,
         reload=True,
         log_level="info"
     ) 

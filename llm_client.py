@@ -251,7 +251,7 @@ You must be deterministic - given the same data and question, always provide the
     
     def _create_analysis_prompt(self, question: str, data_context: str) -> str:
         """Create a comprehensive prompt for data analysis."""
-        prompt = f"""Based on the following datasets, please answer this question with precision and accuracy:
+        prompt = f"""You are a senior data analyst. Based on the provided datasets, answer this question with precision and accuracy:
 
 QUESTION: {question}
 
@@ -259,14 +259,26 @@ DATA CONTEXT:
 {data_context}
 
 INSTRUCTIONS:
-1. Analyze the data carefully to answer the question
+1. Analyze the data carefully to answer the question based on the actual data provided
 2. Return ONLY the direct answer - no explanations, reasoning, or extra text
 3. For numerical questions: return just the number (e.g., "42" not "The answer is 42")
-4. For text questions: return just the answer (e.g., "Titanic" not "The film is Titanic")
+4. For text questions: return just the answer (e.g., "ProductX" not "The product is ProductX")
 5. For correlation questions: return just the correlation value (e.g., "0.485")
-6. If you cannot determine the answer, return "Unable to determine from available data"
-7. Be precise with numerical results - use appropriate decimal places
-8. Return ONLY what is asked for - nothing more
+6. For date questions: return in YYYY-MM-DD format when possible (e.g., "2024-01-15")
+7. If you cannot determine the answer from the available data, return "Unable to determine from available data"
+8. Be precise with numerical results - use appropriate decimal places
+9. Return ONLY what is asked for - nothing more
+
+ANALYSIS GUIDELINES:
+- For counting questions: Count the actual items/records/entities in the data
+- For "highest/maximum" questions: Find the actual maximum value or entity with highest value
+- For "lowest/minimum" questions: Find the actual minimum value or entity with lowest value
+- For average/mean questions: Calculate the arithmetic mean of the relevant values
+- For median questions: Find the middle value when data is sorted
+- For correlation questions: Calculate Pearson correlation coefficient between specified variables
+- For sum/total questions: Add up all relevant values
+- For "which" questions seeking entities: Return the actual name/identifier from the data
+- For date-related questions: Use the actual dates from the data in appropriate format
 
 Answer:"""
 
@@ -470,7 +482,7 @@ Answer:"""
         
         questions_text = "\n".join(numbered_questions)
         
-        prompt = f"""Based on the following datasets, please answer ALL of these questions with precision and accuracy:
+        prompt = f"""You are a senior data analyst. Based on the provided datasets, answer ALL questions with precision and accuracy.
 
 QUESTIONS TO ANSWER:
 {questions_text}
@@ -483,11 +495,25 @@ INSTRUCTIONS:
 2. For each question, return ONLY the direct answer - no explanations, reasoning, or extra text
 3. Format your response as a JSON array where each element corresponds to the answer for that question number
 4. For numerical questions: return just the number (e.g., 42 not "The answer is 42")
-5. For text questions: return just the answer (e.g., "Titanic" not "The film is Titanic")
-6. For correlation questions: return just the correlation value (e.g., 0.485)
-7. If you cannot determine an answer, return "Unable to determine from available data"
-8. Be precise with numerical results - use appropriate decimal places
-9. Return ONLY what is asked for each question - nothing more
+5. For text questions: return just the answer (e.g., "ProductX" not "The product is ProductX")
+6. For correlation questions: return just the correlation value as a number (e.g., 0.485)
+7. For date questions: return in YYYY-MM-DD format when possible (e.g., "2024-01-15")
+8. Analyze the data carefully and compute metrics precisely based on the actual data provided
+9. If you cannot determine an answer from the available data, return "Unable to determine from available data"
+10. Be precise with numerical results - use appropriate decimal places but avoid excessive precision
+11. Return ONLY what is asked for each question - nothing more
+
+ANALYSIS GUIDELINES:
+- For counting questions: Count the actual items/records/entities in the data
+- For "highest/maximum" questions: Find the actual maximum value or entity with highest value
+- For "lowest/minimum" questions: Find the actual minimum value or entity with lowest value
+- For average/mean questions: Calculate the arithmetic mean of the relevant values
+- For median questions: Find the middle value when data is sorted
+- For correlation questions: Calculate Pearson correlation coefficient between specified variables
+- For sum/total questions: Add up all relevant values
+- For "which" questions seeking entities: Return the actual name/identifier from the data
+- For date-related questions: Use the actual dates from the data in appropriate format
+- For percentage/ratio questions: Calculate based on the actual data proportions
 
 RESPONSE FORMAT:
 Return a valid JSON array with exactly {len(questions)} elements, where:
@@ -495,10 +521,10 @@ Return a valid JSON array with exactly {len(questions)} elements, where:
 - Element 2 = answer to question 2
 - And so on...
 
-Example format: ["answer1", 42, "answer3", 0.485, "answer5"]
+Example format: ["answer1", 42, "answer3", 0.485, "2024-01-15"]
 
 JSON Response:"""
-
+        
         return prompt
 
     async def _parse_batch_analysis_response(self, response: str, questions: List[str]) -> List[Any]:

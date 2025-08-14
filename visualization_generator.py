@@ -371,26 +371,31 @@ class VisualizationGenerator:
         """Convert matplotlib figure to Base64 data URI."""
         # Try different formats and compression levels to stay under 100KB
         formats_to_try = [
-            ('png', {'format': 'png', 'dpi': 100}),
-            ('png', {'format': 'png', 'dpi': 80}),
-            ('png', {'format': 'png', 'dpi': 60}),
-            ('webp', {'format': 'webp', 'dpi': 100}),
-            ('webp', {'format': 'webp', 'dpi': 80}),
-            ('jpg', {'format': 'jpg', 'dpi': 100, 'quality': 95}),
-            ('jpg', {'format': 'jpg', 'dpi': 80, 'quality': 85}),
-            ('jpg', {'format': 'jpg', 'dpi': 60, 'quality': 75}),
+            ('png', {'format': 'png', 'dpi': 100, 'bbox_inches': 'tight', 'pad_inches': 0.1}),
+            ('png', {'format': 'png', 'dpi': 80, 'bbox_inches': 'tight', 'pad_inches': 0.1}),
+            ('png', {'format': 'png', 'dpi': 60, 'bbox_inches': 'tight', 'pad_inches': 0.1}),
+            ('png', {'format': 'png', 'dpi': 50, 'bbox_inches': 'tight', 'pad_inches': 0.1}),
         ]
         
         for format_name, kwargs in formats_to_try:
             try:
                 buffer = io.BytesIO()
-                fig.savefig(buffer, bbox_inches='tight', **kwargs)
+                fig.savefig(buffer, **kwargs)
                 buffer.seek(0)
                 
+                # Read the buffer content
+                image_bytes = buffer.read()
+                
                 # Check file size
-                if buffer.getbuffer().nbytes <= self.max_file_size:
-                    image_base64 = base64.b64encode(buffer.read()).decode('utf-8')
-                    return f"data:image/{format_name};base64,{image_base64}"
+                if len(image_bytes) <= self.max_file_size and len(image_bytes) > 0:
+                    # Encode to base64
+                    image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+                    
+                    # Validate the base64 string
+                    if self._is_valid_base64(image_base64):
+                        data_uri = f"data:image/{format_name};base64,{image_base64}"
+                        logger.info(f"Successfully created {format_name} image: {len(image_bytes)} bytes")
+                        return data_uri
                 
                 buffer.close()
                 
@@ -398,25 +403,78 @@ class VisualizationGenerator:
                 logger.warning(f"Failed to save as {format_name}: {str(e)}")
                 continue
         
-        # If all formats fail, return a minimal image
+        # If all formats fail, return a minimal valid image
+        logger.warning("All image formats failed, returning minimal image")
         return await self._create_minimal_image()
+    
+    def _is_valid_base64(self, s: str) -> bool:
+        """Validate if string is valid base64."""
+        try:
+            if len(s) < 10:  # Too short to be a valid image
+                return False
+            
+            # Try to decode and re-encode
+            decoded = base64.b64decode(s, validate=True)
+            reencoded = base64.b64encode(decoded).decode('utf-8')
+            
+            # Check if it starts with PNG header (common case)
+            if decoded.startswith(b'\x89PNG'):
+                return True
+                
+            # For other formats, just check if decode/encode works
+            return len(decoded) > 50  # Reasonable minimum size for an image
+            
+        except Exception:
+            return False
     
     async def _create_error_image(self, error_message: str) -> str:
         """Create a simple error image."""
-        fig, ax = plt.subplots(figsize=(8, 4))
-        ax.text(0.5, 0.5, f'Error: {error_message}', ha='center', va='center', 
-               transform=ax.transAxes, fontsize=12, color='red')
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-        ax.axis('off')
-        
         try:
+            fig, ax = plt.subplots(figsize=(6, 4), dpi=80)
+            ax.text(0.5, 0.5, f'Visualization Error', ha='center', va='center', 
+                   transform=ax.transAxes, fontsize=14, color='red', weight='bold')
+            ax.text(0.5, 0.3, 'Unable to generate chart', ha='center', va='center', 
+                   transform=ax.transAxes, fontsize=10, color='black')
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
+            ax.axis('off')
+            
+            # Use the same conversion method to ensure consistency
             return await self._convert_to_base64(fig)
+        except Exception as e:
+            logger.error(f"Failed to create error image: {str(e)}")
+            return await self._create_minimal_image()
         finally:
-            plt.close(fig)
+            plt.close('all')
     
     async def _create_minimal_image(self) -> str:
-        """Create a minimal 1x1 transparent image."""
-        # 1x1 transparent PNG
-        minimal_png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
+        """Create a minimal 1x1 transparent PNG image with valid base64."""
+        try:
+            # Create a minimal 10x10 transparent PNG programmatically
+            fig, ax = plt.subplots(figsize=(1, 1), dpi=50)
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
+            ax.axis('off')
+            ax.patch.set_alpha(0)  # Transparent background
+            
+            # Convert to base64
+            buffer = io.BytesIO()
+            fig.savefig(buffer, format='png', dpi=50, bbox_inches='tight', 
+                       pad_inches=0, transparent=True)
+            buffer.seek(0)
+            
+            image_bytes = buffer.read()
+            if len(image_bytes) > 0:
+                image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+                if self._is_valid_base64(image_base64):
+                    return f"data:image/png;base64,{image_base64}"
+            
+            buffer.close()
+            plt.close(fig)
+            
+        except Exception as e:
+            logger.error(f"Failed to create minimal image: {str(e)}")
+        
+        # Final fallback: use a known valid minimal PNG
+        minimal_png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChAI9jU77zgAAAABJRU5ErkJggg=="
         return f"data:image/png;base64,{minimal_png}" 
