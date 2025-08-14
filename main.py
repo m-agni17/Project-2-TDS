@@ -136,6 +136,7 @@ async def analyze_data(files: List[UploadFile] = File(...)):
             )
             
             # Return result as JSON
+            print(result)
             return JSONResponse(content=result)
             
         except asyncio.TimeoutError:

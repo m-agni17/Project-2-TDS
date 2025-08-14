@@ -230,17 +230,20 @@ def analyze_questions_batch_gemini(content_summary: str,
             
             # Parse batch response
             regular_answers = parse_batch_response(response.text, len(regular_questions))
-            
+
             # Place regular answers in correct positions
             for j, (original_idx, question) in enumerate(regular_questions):
                 if j < len(regular_answers):
-                    answers[original_idx] = convert_answer_type(regular_answers[j], question)
+                    answer = convert_answer_type(regular_answers[j], question)
+                    # Convert all answers to strings for consistent JSON array format
+                    answers[original_idx] = str(answer)
         
         # Process visualization questions individually (they need special handling)
         for original_idx, question in viz_questions:
             try:
                 viz_answer = create_visualization_gemini(content_summary, question, gemini_client, actual_tables)
-                answers[original_idx] = viz_answer
+                # Visualization answers are already strings (base64), but ensure consistency
+                answers[original_idx] = str(viz_answer)
             except Exception as e:
                 print(f"Visualization error for question {original_idx}: {e}")
                 answers[original_idx] = f"Visualization failed: {str(e)}"
@@ -275,7 +278,8 @@ def analyze_questions_individually_gemini(content_summary: str,
             if requires_visualization(question):
                 # Handle visualization questions
                 viz_answer = create_visualization_gemini(content_summary, question, gemini_client, actual_tables)
-                answers.append(viz_answer)
+                # Convert to string for consistent JSON array format
+                answers.append(str(viz_answer))
             else:
                 # Handle regular analysis questions
                 prompt = create_single_analysis_prompt(content_summary, question)
@@ -289,9 +293,10 @@ def analyze_questions_individually_gemini(content_summary: str,
                         thinking_config=types.ThinkingConfig(thinking_budget=0)
                     )
                 )
-                
+            
                 answer = convert_answer_type(response.text, question)
-                answers.append(answer)
+                # Convert to string for consistent JSON array format
+                answers.append(str(answer))
                 
         except Exception as e:
             print(f"Error analyzing question '{question}': {str(e)}")
@@ -313,15 +318,19 @@ Questions to answer:
         prompt += f"{i}. {question}\n"
     
     prompt += f"""
+CRITICAL: Return ONLY a simple JSON array with exactly {len(questions)} elements. Do NOT return a complex object or data structure.
+
 RESPONSE FORMAT:
-Return a valid JSON array with exactly {len(questions)} elements, where:
-- Element 1 = answer to question 1
-- Element 2 = answer to question 2
+Return a valid JSON array with exactly {len(questions)} string elements, where:
+- Element 1 = answer to question 1 (as a string)
+- Element 2 = answer to question 2 (as a string)
 - And so on...
 
-Example format: ["answer1", 42, "answer3", 0.485, "2024-01-15"]
+Example format: ["answer1", "42", "answer3", "0.485", "2024-01-15"]
 
-Make each answer direct and factual. If a question asks for a number, return just the number. If it asks for a name, return just the name. Be precise and concise.
+Make each answer direct and factual. Convert numbers to strings. If a question asks for a number, return it as a string (e.g., "42" not 42). If it asks for a name, return the name as a string. Be precise and concise.
+
+IMPORTANT: Return ONLY the JSON array of strings, no explanations, no code blocks, no extra text.
 
 JSON Response:
 """
@@ -439,10 +448,19 @@ If columns aren't clear, use the first two numeric columns available.
         from visualizer import create_minimal_plot_base64
         return create_minimal_plot_base64(f"Visualization error: {str(e)}")
 
-def parse_batch_response(response_text: str, expected_count: int) -> List[str]:
+def parse_batch_response(response_text: str, expected_count: int) -> List[Any]:
     """Parse batch response from Gemini into individual answers."""
     try:
         # Clean up the response and extract JSON
+        response_text = response_text.strip()
+        
+        # Remove code block markers if present
+        if response_text.startswith('```json'):
+            response_text = response_text[7:]
+        if response_text.startswith('```'):
+            response_text = response_text[3:]
+        if response_text.endswith('```'):
+            response_text = response_text[:-3]
         response_text = response_text.strip()
         
         # Find JSON array boundaries
@@ -451,22 +469,26 @@ def parse_batch_response(response_text: str, expected_count: int) -> List[str]:
         
         if start_idx != -1 and end_idx != -1:
             json_str = response_text[start_idx:end_idx + 1]
-            answers = json.loads(json_str)
-            
-            if isinstance(answers, list):
-                # Ensure we have the right number of answers
-                while len(answers) < expected_count:
-                    answers.append("Unable to determine answer")
-                return answers[:expected_count]
+            try:
+                answers = json.loads(json_str)
+                
+                if isinstance(answers, list):
+                    # Ensure we have the right number of answers
+                    while len(answers) < expected_count:
+                        answers.append("Unable to determine answer")
+                    return answers[:expected_count]
+                        
+            except json.JSONDecodeError:
+                pass
     
-    except json.JSONDecodeError as e:
+    except Exception as e:
         print(f"JSON parsing failed: {e}")
         print(f"Response: {response_text[:500]}...")
     
     # Fallback parsing
     return fallback_parse_response(response_text, expected_count)
 
-def fallback_parse_response(response_text: str, expected_count: int) -> List[str]:
+def fallback_parse_response(response_text: str, expected_count: int) -> List[Any]:
     """Fallback parsing when JSON fails."""
     answers = []
     
@@ -612,17 +634,23 @@ def extract_tables_from_content_data(content_summary: str) -> List[pd.DataFrame]
     
     return tables
 
-def convert_answer_type(answer: str, question: str) -> Any:
+def convert_answer_type(answer: Any, question: str) -> Any:
     """
     Convert answer to appropriate type based on question context.
     
     Args:
-        answer: Raw answer string from Gemini
+        answer: Raw answer from Gemini (can be string, int, float, etc.)
         question: Original question for context
         
     Returns:
         Converted answer (string, int, float, etc.)
     """
+    # Handle non-string inputs (from JSON parsing)
+    if not isinstance(answer, str):
+        # If it's already the right type (int, float, etc.), return as-is
+        return answer
+    
+    # For string inputs, clean and process
     answer = answer.strip()
     
     # Check if question expects a number

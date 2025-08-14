@@ -58,29 +58,36 @@ def parse_questions_with_gemini(text: str, client) -> Dict[str, Any]:
     Returns:
         Dictionary containing parsed questions, URLs, and expected format
     """
-    system_prompt = """
+    system_prompt = f"""
 You are a question parser for a data analysis system. Your job is to:
-1. Extract all questions from the input text
+1. Extract all questions from the input text (numbered questions, questions ending with ?, or imperative statements like "Draw a scatterplot...")
 2. Identify any URLs mentioned for data sources
-3. Determine the expected output format
+3. Intelligently determine the expected output format by analyzing the text instructions
 4. Classify the type of analysis needed
-5. If the question asks for a visualization, determine the type of visualization needed
-6. If the question asks us to do a thing then it is a question like "Draw a scatterplot of Rank and Peak along with a dotted red regression line through it."
+5. If the question asks for a visualization, determine the type and format
 
+Analyze the text carefully to determine the output format:
+- If the text asks for a "JSON array" or shows example like ["answer1", "answer2", ...], use "array" format
+- If the text asks for a "JSON object" or shows example like {{"question": "answer", ...}}, use "object" format with question_key_mapping=true
+- Pay attention to any example structures provided in the text
 
 Return your response as a JSON object with the following structure:
-{
+{{
     "questions": ["question1", "question2", ...],
     "urls": ["url1", "url2", ...],
-    "output_format": "array" or "object",
+    "output_format": {{
+        "type": "array" or "object",
+        "structure": null or example_structure_if_provided,
+        "question_key_mapping": true or false
+    }},
     "analysis_types": ["scraping", "statistical", "visualization", "numerical"],
-    "visualization_requirements": {
+    "visualization_requirements": {{
         "needed": true/false,
         "type": "scatterplot/histogram/etc",
         "encoding": "base64",
         "format": "png/webp/etc"
-    }
-}
+    }}
+}}
 
 Parse this text:
 
@@ -97,9 +104,12 @@ Parse this text:
                 thinking_config=types.ThinkingConfig(thinking_budget=0)  # Disable thinking
             )
         )
+
+        
         
         response_text = response.text
-        
+        with open("prompts/user_prompt_response_question.txt", "w") as f:
+            f.write(response_text)
         # Extract JSON from response
         start_idx = response_text.find('{')
         end_idx = response_text.rfind('}')
@@ -148,10 +158,20 @@ def fallback_question_parsing(text: str) -> Dict[str, Any]:
             'analyze' in line.lower() or
             'find' in line.lower() or
             'calculate' in line.lower() or
-            'count' in line.lower()):
+            'count' in line.lower() or
+            'draw' in line.lower() or
+            'plot' in line.lower() or
+            'create' in line.lower()):
             questions.append(line)
     
     urls = extract_urls_from_text(text)
+    
+    # Simple fallback format detection based on common phrases
+    format_info = {"type": "array", "structure": None, "question_key_mapping": False}
+    if "JSON object" in text:
+        format_info = {"type": "object", "structure": None, "question_key_mapping": True}
+    elif "JSON array" in text:
+        format_info = {"type": "array", "structure": None, "question_key_mapping": False}
     
     # Determine if visualization is needed
     needs_viz = any(keyword in text.lower() for keyword in 
@@ -173,7 +193,7 @@ def fallback_question_parsing(text: str) -> Dict[str, Any]:
     return {
         "questions": questions,
         "urls": urls,
-        "output_format": "array" if "JSON array" in text else "object",
+        "output_format": format_info,
         "analysis_types": ["scraping", "analysis", "numerical"],
         "visualization_requirements": {
             "needed": needs_viz,

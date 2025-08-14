@@ -8,6 +8,7 @@ import pandas as pd
 import json
 import traceback
 from groq import Groq
+import re # Added for question_key_mapping
 
 # Import our modules
 from question_parser import process_question_file, create_groq_client
@@ -19,7 +20,7 @@ class DataAnalysisError(Exception):
     pass
 
 def process_data_analysis_request(question_content: str, 
-                                additional_files: Dict[str, Any] = None) -> List[Any]:
+                                additional_files: Dict[str, Any] = None) -> Union[List[Any], Dict[str, Any]]:
     """
     Main function to process a complete data analysis request.
     
@@ -28,7 +29,7 @@ def process_data_analysis_request(question_content: str,
         additional_files: Dictionary of additional files {filename: content/data}
         
     Returns:
-        List of answers in the requested format
+        List of answers or Dict of answers in the requested format
     """
     try:
         # Step 1: Parse questions using LLM
@@ -57,7 +58,15 @@ def process_data_analysis_request(question_content: str,
             print("Warning: Response format validation failed")
             # Still return the answers, but log the issue
         
-        return answers
+        # Step 7: Format response according to detected output format
+        output_format = parsed_questions.get("output_format", {"type": "array"})
+        formatted_response = format_response_for_output(
+            answers, 
+            parsed_questions["questions"], 
+            output_format
+        )
+        
+        return formatted_response
         
     except Exception as e:
         # Log error details for debugging
@@ -68,10 +77,16 @@ def process_data_analysis_request(question_content: str,
         print(f"Analysis failed: {error_details}")
         
         # Return error response in expected format
-        if "array" in question_content.lower():
+        try:
+            parsed_questions = process_question_file(question_content)
+            output_format = parsed_questions.get("output_format", {"type": "array"})
+            if output_format.get("type") == "array":
+                return [f"Error: {str(e)}"]
+            else:
+                return {"error": str(e)}
+        except:
+            # Fallback to array format
             return [f"Error: {str(e)}"]
-        else:
-            return {"error": str(e)}
 
 def incorporate_additional_files(scraped_data: Dict[str, Any],
                                additional_files: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -142,29 +157,45 @@ def incorporate_additional_files(scraped_data: Dict[str, Any],
     return combined_data
 
 def format_response_for_output(answers: List[Any], 
-                             output_format: str) -> Union[List[Any], Dict[str, Any]]:
+                             questions: List[str],
+                             output_format: Dict[str, Any]) -> Union[List[Any], Dict[str, Any]]:
     """
     Format the final response according to the expected output format.
     
     Args:
         answers: List of answers
-        output_format: Expected format ("array" or "object")
+        questions: List of questions 
+        output_format: Output format specification from question parser
         
     Returns:
-        Formatted response
+        Formatted response (list or dict)
     """
-    if output_format == "array":
+    format_type = output_format.get("type", "array")
+    
+    if format_type == "array":
+        # Return as JSON array of strings
         return answers
-    elif output_format == "object":
-        # Convert to object format
-        result = {}
-        # This would need to be customized based on specific question patterns
-        # For now, return as numbered questions
-        for i, answer in enumerate(answers):
-            result[f"question_{i+1}"] = answer
-        return result
+    
+    elif format_type == "object":
+        # Check if we should use question-key mapping
+        if output_format.get("question_key_mapping", False):
+            # Use questions as keys and answers as values
+            result = {}
+            for i, (question, answer) in enumerate(zip(questions, answers)):
+                # Clean up question text (remove numbering, clean formatting)
+                clean_question = re.sub(r'^\d+\.\s*', '', question.strip())
+                result[clean_question] = answer
+            return result
+        else:
+            # Use generic numbered keys
+            result = {}
+            for i, answer in enumerate(answers):
+                result[f"question_{i+1}"] = answer
+            return result
+    
     else:
-        return answers  # Default to array
+        # Default to array format
+        return answers
 
 def validate_scraped_content(scraped_data: Dict[str, Any]) -> bool:
     """
