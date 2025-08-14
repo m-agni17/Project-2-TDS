@@ -13,8 +13,6 @@ from groq import Groq
 from question_parser import process_question_file, create_groq_client
 from data_scraper import scrape_data_from_urls
 from data_analyzer import analyze_scraped_content
-from visualizer import generate_visualization
-from config import get_response_timeout
 
 class DataAnalysisError(Exception):
     """Custom exception for data analysis errors."""
@@ -53,6 +51,11 @@ def process_data_analysis_request(question_content: str,
             parsed_questions["questions"], 
             client
         )
+        
+        # Step 6: Validate response format
+        if not validate_response_format(answers, len(parsed_questions["questions"])):
+            print("Warning: Response format validation failed")
+            # Still return the answers, but log the issue
         
         return answers
         
@@ -186,12 +189,13 @@ def validate_scraped_content(scraped_data: Dict[str, Any]) -> bool:
     
     return False
 
-def validate_response_format(response: List[Any]) -> bool:
+def validate_response_format(response: List[Any], expected_count: int = None) -> bool:
     """
     Validate that the response meets the expected format requirements.
     
     Args:
         response: Response to validate
+        expected_count: Expected number of answers (optional)
         
     Returns:
         True if valid, False otherwise
@@ -202,12 +206,18 @@ def validate_response_format(response: List[Any]) -> bool:
     if len(response) == 0:
         return False
     
+    # Check if we have the expected number of answers
+    if expected_count is not None and len(response) != expected_count:
+        print(f"Response length mismatch: expected {expected_count}, got {len(response)}")
+        return False
+    
     # Check for visualization data URI if present
     if len(response) > 3:
         last_item = response[-1]
         if isinstance(last_item, str) and last_item.startswith("data:image/"):
             # Check size constraint (100KB = ~133,333 base64 chars)
             if len(last_item) > 140_000:  # Give some buffer
+                print(f"Visualization data URI too large: {len(last_item)} characters")
                 return False
     
     return True 

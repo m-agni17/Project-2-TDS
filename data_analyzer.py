@@ -217,6 +217,7 @@ def analyze_questions_batch_gemini(content_summary: str,
         if regular_questions:
             batch_prompt = create_batch_analysis_prompt(content_summary, [q for _, q in regular_questions])
             
+            
             response = gemini_client.models.generate_content(
                 model=get_google_model(),
                 contents=batch_prompt,
@@ -278,6 +279,7 @@ def analyze_questions_individually_gemini(content_summary: str,
             else:
                 # Handle regular analysis questions
                 prompt = create_single_analysis_prompt(content_summary, question)
+                
                 response = gemini_client.models.generate_content(
                     model=get_google_model(),
                     contents=prompt,
@@ -310,11 +312,18 @@ Questions to answer:
     for i, question in enumerate(questions, 1):
         prompt += f"{i}. {question}\n"
     
-    prompt += """
-Respond with ONLY a JSON array containing the answers in order:
-["answer1", "answer2", "answer3", ...]
+    prompt += f"""
+RESPONSE FORMAT:
+Return a valid JSON array with exactly {len(questions)} elements, where:
+- Element 1 = answer to question 1
+- Element 2 = answer to question 2
+- And so on...
+
+Example format: ["answer1", 42, "answer3", 0.485, "2024-01-15"]
 
 Make each answer direct and factual. If a question asks for a number, return just the number. If it asks for a name, return just the name. Be precise and concise.
+
+JSON Response:
 """
     
     return prompt
@@ -328,6 +337,7 @@ Content Summary: {content_summary[:50000]}
 
 Question: {question}
 
+RESPONSE FORMAT:
 Provide a direct, factual answer. If the question asks for a number, return just the number. If it asks for a name, return just the name. Be precise and concise.
 
 Answer:"""
@@ -379,6 +389,7 @@ Based on the question and available columns, respond with ONLY valid JSON:
 If the question asks for a scatterplot of "Rank and Peak", use those exact column names.
 If columns aren't clear, use the first two numeric columns available.
         """
+        
         response = gemini_client.models.generate_content(
             model=get_google_model(),
             contents=viz_prompt,
