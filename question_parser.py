@@ -108,8 +108,7 @@ Parse this text:
         
         
         response_text = response.text
-        with open("prompts/user_prompt_response_question.txt", "w") as f:
-            f.write(response_text)
+        
         # Extract JSON from response
         start_idx = response_text.find('{')
         end_idx = response_text.rfind('}')
